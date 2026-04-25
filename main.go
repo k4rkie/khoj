@@ -8,9 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-)
 
-var ignore = [10]string{".json", "node_modules/", "README.md"}
+	"github.com/denormal/go-gitignore"
+)
 
 func main() {
 
@@ -26,26 +26,61 @@ func main() {
 		os.Exit(1)
 	}
 
-	err := filepath.WalkDir(*rootDir, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	filePaths, err := FindFiles(*rootDir)
+
+	if err != nil {
+		log.Printf("Failed to find files in the provided directory. %v", err)
+		os.Exit(1)
+	}
+
+	for _, file := range filePaths {
+		if err := SearchInFile(file, *keyword); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+			continue
 		}
+	}
+
+}
+
+func FindFiles(rootDir string) (filePaths []string, err error) {
+
+	// create a matcher instance to compare the files in gitignore and current file
+	matcher, err := gitignore.NewFromFile(".gitignore")
+	if err != nil {
+		return filePaths, fmt.Errorf("Could read gitignore: %v", err)
+	}
+
+	err = filepath.WalkDir(rootDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return fmt.Errorf("Error tracking file %v: %v", path, err)
+		}
+
+		// check if the current file / dir matches entry in the gitignore
+		match := matcher.Match(path)
+		if match != nil && match.Ignore() {
+			// skip if the dir is in gitignore
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		// if not a dir add the path to the file paths
 		if !d.IsDir() {
-			searchInFile(path, *keyword)
+			filePaths = append(filePaths, path)
 		}
 		return nil
 	})
-
 	if err != nil {
-		fmt.Printf("Error walking the path %q: %v\n", *rootDir, err)
+		return filePaths, fmt.Errorf("Error finding files int he provided directory %v: %v", rootDir, err)
 	}
+	return filePaths, nil
 }
 
-func searchInFile(path string, keyword string) {
+func SearchInFile(path string, keyword string) (err error) {
 	file, err := os.Open(path)
 
 	if err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("Could not open file %s: %w", path, err)
 	}
 
 	defer file.Close()
@@ -60,12 +95,14 @@ func searchInFile(path string, keyword string) {
 		lineNumber++
 		// if keyword exists print it from its starting index
 		if keyword_index != -1 {
-			fmt.Printf("[File: %s] [Line: %d]. \033[1;32m%s\033[0m\n", path, lineNumber, scanner.Text()[keyword_index:])
+			fmt.Printf("%v:%v:%v: %s\n", path, lineNumber, keyword_index+1, scanner.Text()[keyword_index:])
 		}
 	}
 
 	// if error occurs while reading then exit
 	if err := scanner.Err(); err != nil {
-		log.Fatal(err)
+		return fmt.Errorf("Could not read file %s: %w", path, err)
 	}
+
+	return nil
 }
